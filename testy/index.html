@@ -61,6 +61,11 @@ if (location.search) history.replaceState(null, "", location.pathname + "?s=" + 
 const url = p => `${FB}/rodziny/${encodeURIComponent(box)}/${p}.json`;
 let K = null, T = null;
 
+async function answerHash(id, text) {
+  const b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`kpc1|${id}|${text}`)));
+  return [...b].map(x => x.toString(16).padStart(2, "0")).join("").slice(0, 16);
+}
+
 async function getJson(u) { const r = await fetch(u, { cache: "no-store" }); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
 
 function dateLabel(d) {
@@ -102,12 +107,16 @@ async function start(id, b) {
   catch (e) { b.disabled = false; b.textContent = "Start"; alert("Nie udało się pobrać testu. Sprawdź internet."); return; }
   const info = (K.testy || []).find(t => t.id === id) || {};
   const n = Math.min(d.pytan || 20, d.pytania.length);
-  const qs = shuffle(d.pytania).slice(0, n).map(q => ({
-    id: q.id, q: q.q, r: d.rozdzialy && d.rozdzialy[q.r] || "",
-    pf: typeof q.pf === "boolean",
-    a: typeof q.pf === "boolean" ? ["Prawda", "Fałsz"] : shuffle(q.a),
-    dobra: typeof q.pf === "boolean" ? (q.pf ? "Prawda" : "Fałsz") : q.a[0],
-  }));
+  // w opublikowanym teście nie ma jawnych odpowiedzi – tylko skrót dobrej (h)
+  const qs = [];
+  for (const q of shuffle(d.pytania).slice(0, n)) {
+    const pf = q.t === "pf" || typeof q.pf === "boolean";
+    const opts = pf ? ["Prawda", "Fałsz"] : q.a.slice();
+    let dobra = "";
+    if (q.h) { for (const o of opts) if (await answerHash(q.id, o) === q.h) { dobra = o; break; } }
+    else dobra = pf ? (q.pf ? "Prawda" : "Fałsz") : q.a[0];
+    qs.push({ id: q.id, q: q.q, r: d.rozdzialy && d.rozdzialy[q.r] || "", pf, a: pf ? opts : shuffle(opts), dobra });
+  }
   T = { id, nazwa: d.nazwa || info.nazwa || "", qs, i: 0, ans: [] };
   question();
 }
