@@ -83,8 +83,8 @@ async function home() {
     return;
   }
   app.innerHTML = `<p class="muted"><span class="spin"></span>Ładowanie…</p>`;
-  let st = null;
-  try { [K, st] = await Promise.all([getJson(url("konfig")), getJson(url("stan")).catch(() => null)]); }
+  let st = null, allStats = null;
+  try { [K, st, allStats] = await Promise.all([getJson(url("konfig")), getJson(url("stan")).catch(() => null), getJson(url("statystyki")).catch(() => null)]); }
   catch (e) { app.innerHTML = `<h1>📚 Testy</h1><div class="card"><h2>Brak internetu</h2><p class="muted">Sprawdź połączenie i spróbuj jeszcze raz.</p><button class="btn wide" onclick="home()">Spróbuj ponownie</button></div>`; return; }
   if (!K) { app.innerHTML = `<h1>📚 Testy</h1><div class="card"><h2>Ten link już nie działa</h2><p class="muted">Poproś tatę o nowy link.</p></div>`; return; }
   const left = st && Date.now() - (st.czas || 0) < 6 * 3600_000 ? st.pozostalo : null;
@@ -96,17 +96,41 @@ async function home() {
     ${left != null ? `<span class="pill ${left > 0 ? "ok" : "warn"}">${left > 0 ? `Dziś możesz jeszcze zdobyć: ${fmtSec(left)}` : "Dzisiejsze maksimum zdobyte"}</span>` : `<span class="pill">Najwięcej dziennie: ${K.max} min</span>`}
     ${(K.testy || []).map(t => `<div class="card"><h2>${esc(t.nazwa)}</h2><div class="muted">${esc(t.opis)}</div>
       <span class="pill">${t.pytan} pytań</span>${best[t.id] != null ? `<span class="pill">Rekord: ${best[t.id]}/${t.pytan}</span>` : ""}${t.termin ? `<span class="pill warn">${esc(dateLabel(t.termin))}</span>` : ""}
-      <button class="btn wide" data-id="${esc(t.id)}">Start</button></div>`).join("") || `<div class="card"><h2>Brak testów</h2><p class="muted">Tata nie włączył jeszcze żadnego testu.</p></div>`}`;
-  app.querySelectorAll("button[data-id]").forEach(b => b.onclick = () => start(b.dataset.id, b));
+      <button class="btn wide" data-id="${esc(t.id)}">Start</button>
+      ${hardCount(allStats, t.id) >= 5 ? `<button class="btn light wide" data-id="${esc(t.id)}" data-hard="1">Trening: moje trudne (${hardCount(allStats, t.id)})</button>
+      <button class="btn light wide" data-list="${esc(t.id)}">Pokaż moje trudne</button>` : ""}</div>`).join("") || `<div class="card"><h2>Brak testów</h2><p class="muted">Tata nie włączył jeszcze żadnego testu.</p></div>`}`;
+  app.querySelectorAll("button[data-id]").forEach(b => b.onclick = () => start(b.dataset.id, b, !!b.dataset.hard));
+  app.querySelectorAll("button[data-list]").forEach(b => b.onclick = () => hardList(b.dataset.list, allStats));
 }
 
-async function start(id, b) {
+const isHard = s => s && s.length >= 2 && s[1] > 0 && s[1] * 2 >= s[0];
+function hardCount(all, id) { const s = all && all[id]; return s ? Object.values(s).filter(isHard).length : 0; }
+
+async function hardList(id, all) {
+  app.innerHTML = `<p class="muted"><span class="spin"></span>Ładowanie…</p>`;
+  let d; try { d = await getJson(`${encodeURIComponent(id)}.json`); } catch (e) { return home(); }
+  const s = (all && all[id]) || {};
+  const rows = [];
+  for (const q of d.pytania) {
+    const x = s[q.id]; if (!isHard(x)) continue;
+    const pf = q.t === "pf" || typeof q.pf === "boolean";
+    const opts = pf ? ["Prawda", "Fałsz"] : q.a;
+    let good = ""; for (const o of opts) if (await answerHash(q.id, o) === q.h) { good = o; break; }
+    rows.push({ text: d.styl === "ortografia" ? q.q.replace(/\([^)]*\)/, good) : q.q + " → " + good, bad: x[1], ok: x[0] });
+  }
+  rows.sort((a, b) => (b.bad - b.ok / 2) - (a.bad - a.ok / 2));
+  app.innerHTML = `<h1>Moje trudne</h1><p class="muted">${esc(d.nazwa)} – te wracają w testach częściej, dopóki ich nie opanujesz.</p>
+    <div class="card">${rows.map(r => `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee"><b style="font-size:18px">${esc(r.text)}</b><span class="muted">✘ ${r.bad} · ✔ ${r.ok}</span></div>`).join("")}</div>
+    <button class="btn wide" onclick="home()">Wróć</button>`;
+}
+
+async function start(id, b, hardOnly) {
   b.disabled = true; b.innerHTML = `<span class="spin"></span>Ładowanie…`;
   let d;
   try { d = await getJson(`${encodeURIComponent(id)}.json?v=${Date.now()}`); }
   catch (e) { b.disabled = false; b.textContent = "Start"; alert("Nie udało się pobrać testu. Sprawdź internet."); return; }
   const info = (K.testy || []).find(t => t.id === id) || {};
-  const n = Math.min(d.pytan || 20, d.pytania.length);
+  let n = Math.min(d.pytan || 20, d.pytania.length);
   // trudne wyrazy częściej, dobrze znane rzadziej (statystyki zapisuje komputer po każdym teście)
   let stats = {};
   try { stats = (await getJson(url("statystyki/" + encodeURIComponent(id)))) || {}; } catch (e) {}
@@ -118,8 +142,10 @@ async function start(id, b) {
     if (since <= 0) w *= 0.15; else if (since === 1) w *= 0.5;
     return w;
   };
-  const pool = d.pytania.map(q => ({ q, k: Math.pow(Math.random(), 1 / weight(stats[q.id])) }))
-    .sort((a, b) => b.k - a.k).slice(0, n).map(x => x.q);
+  let source = d.pytania;
+  if (hardOnly) { const h = d.pytania.filter(q => isHard(stats[q.id])); if (h.length >= 5) source = h; }
+  const pool = source.map(q => ({ q, k: Math.pow(Math.random(), 1 / weight(stats[q.id])) }))
+    .sort((a, b) => b.k - a.k).slice(0, Math.min(n, source.length)).map(x => x.q);
   // w opublikowanym teście nie ma jawnych odpowiedzi – tylko skrót dobrej (h)
   const qs = [];
   for (const q of shuffle(pool)) {
@@ -130,7 +156,7 @@ async function start(id, b) {
     else dobra = pf ? (q.pf ? "Prawda" : "Fałsz") : q.a[0];
     qs.push({ id: q.id, q: q.q, r: d.rozdzialy && d.rozdzialy[q.r] || "", pf, a: pf ? opts : shuffle(opts), dobra });
   }
-  T = { id, nazwa: d.nazwa || info.nazwa || "", qs, i: 0, ans: [], orto: d.styl === "ortografia" };
+  T = { id, tryb: hardOnly ? "trudne" : "", nazwa: d.nazwa || info.nazwa || "", qs, i: 0, ans: [], orto: d.styl === "ortografia" || d.styl === "matematyka", gap: d.styl === "ortografia" };
   question();
 }
 
@@ -162,7 +188,7 @@ async function finish() {
   if (best[T.id] == null || ok > best[T.id]) { best[T.id] = ok; store.set("best", best); }
   const fill = (q, l) => q.replace(/\([^)]*\)/, l);
   const bad = T.qs.map((q, i) => ({ q, a: T.ans[i] })).filter(x => x.a.odp !== x.q.dobra)
-    .map(x => T.orto ? { q: { ...x.q, q: fill(x.q.q, "…"), dobra: fill(x.q.q, x.q.dobra) }, a: { ...x.a, odp: fill(x.q.q, x.a.odp) } } : x);
+    .map(x => T.gap ? { q: { ...x.q, q: fill(x.q.q, "…"), dobra: fill(x.q.q, x.q.dobra) }, a: { ...x.a, odp: fill(x.q.q, x.a.odp) } } : x);
   app.innerHTML = `<div class="card center">
       <div class="muted">${esc(T.nazwa)}</div>
       <div class="big">${ok}/${n}</div>
@@ -173,7 +199,7 @@ async function finish() {
     ${bad.length ? `<div class="card"><h2>Do poprawy (${bad.length})</h2>${bad.map(x => `<div class="mist"><b>${esc(x.q.q)}</b><br>Twoja: ${esc(x.a.odp)}<br>Dobra: <b style="color:var(--ok)">${esc(x.q.dobra)}</b></div>`).join("")}</div>` : `<div class="card center"><h2>Bez błędów – brawo! 👏</h2></div>`}
     <button class="btn wide" onclick="home()">Wróć do testów</button>`;
   window.scrollTo(0, 0);
-  const body = JSON.stringify({ test: T.id, czas: Date.now(), odpowiedzi: T.ans });
+  const body = JSON.stringify({ test: T.id, czas: Date.now(), odpowiedzi: T.ans, tryb: T.tryb });
   let name = null;
   for (let i = 0; i < 3 && !name; i++) {
     try { const r = await fetch(url("wyniki"), { method: "POST", body }); if (r.ok) name = (await r.json()).name; } catch (e) {}
