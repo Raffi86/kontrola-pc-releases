@@ -107,9 +107,22 @@ async function start(id, b) {
   catch (e) { b.disabled = false; b.textContent = "Start"; alert("Nie udało się pobrać testu. Sprawdź internet."); return; }
   const info = (K.testy || []).find(t => t.id === id) || {};
   const n = Math.min(d.pytan || 20, d.pytania.length);
+  // trudne wyrazy częściej, dobrze znane rzadziej (statystyki zapisuje komputer po każdym teście)
+  let stats = {};
+  try { stats = (await getJson(url("statystyki/" + encodeURIComponent(id)))) || {}; } catch (e) {}
+  const today = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(2026, 0, 1).getTime()) / 86400000);
+  const weight = s => {
+    if (!s || s.length < 3) return 1.5;
+    let w = Math.min(6, Math.max(0.2, 1 + 2 * s[1] - 0.5 * s[0]));
+    const since = today - s[2];
+    if (since <= 0) w *= 0.15; else if (since === 1) w *= 0.5;
+    return w;
+  };
+  const pool = d.pytania.map(q => ({ q, k: Math.pow(Math.random(), 1 / weight(stats[q.id])) }))
+    .sort((a, b) => b.k - a.k).slice(0, n).map(x => x.q);
   // w opublikowanym teście nie ma jawnych odpowiedzi – tylko skrót dobrej (h)
   const qs = [];
-  for (const q of shuffle(d.pytania).slice(0, n)) {
+  for (const q of shuffle(pool)) {
     const pf = q.t === "pf" || typeof q.pf === "boolean";
     const opts = pf ? ["Prawda", "Fałsz"] : q.a.slice();
     let dobra = "";
@@ -117,7 +130,7 @@ async function start(id, b) {
     else dobra = pf ? (q.pf ? "Prawda" : "Fałsz") : q.a[0];
     qs.push({ id: q.id, q: q.q, r: d.rozdzialy && d.rozdzialy[q.r] || "", pf, a: pf ? opts : shuffle(opts), dobra });
   }
-  T = { id, nazwa: d.nazwa || info.nazwa || "", qs, i: 0, ans: [] };
+  T = { id, nazwa: d.nazwa || info.nazwa || "", qs, i: 0, ans: [], orto: d.styl === "ortografia" };
   question();
 }
 
@@ -126,8 +139,8 @@ function question() {
   app.innerHTML = `<div class="muted">${esc(T.nazwa)}${q.r ? " · " + esc(q.r) : ""}</div>
     <div class="bar"><div style="width:${(T.i / T.qs.length) * 100}%"></div></div>
     <div class="muted">Pytanie ${T.i + 1} z ${T.qs.length}${q.pf ? " · prawda czy fałsz?" : ""}</div>
-    <div class="q">${esc(q.q)}</div>
-    <div class="answers ${q.pf ? "pf" : ""}">${q.a.map((a, i) => `<button class="ans" data-i="${i}" disabled>${q.pf ? (a === "Prawda" ? "✔ " : "✘ ") : String.fromCharCode(65 + i) + ". "}${esc(a)}<span class="fill"></span></button>`).join("")}</div>
+    <div class="q" style="${T.orto ? "font-size:38px;text-align:center;letter-spacing:1px;margin:18px 0 24px" : ""}">${esc(q.q)}</div>
+    <div class="answers ${q.pf || T.orto ? "pf" : ""}">${q.a.map((a, i) => `<button class="ans" data-i="${i}" disabled style="${T.orto ? "font-size:30px" : ""}">${q.pf ? (a === "Prawda" ? "✔ " : "✘ ") : T.orto ? "" : String.fromCharCode(65 + i) + ". "}${esc(a)}<span class="fill"></span></button>`).join("")}</div>
     <button class="btn light wide" id="quit">Przerwij test</button>`;
   const shown = performance.now();
   const btns = [...app.querySelectorAll(".ans")];
@@ -147,7 +160,9 @@ async function finish() {
   const ocena = proc >= 95 ? 6 : proc >= 85 ? 5 : proc >= 70 ? 4 : proc >= 50 ? 3 : proc >= 30 ? 2 : 1;
   const best = store.get("best", {});
   if (best[T.id] == null || ok > best[T.id]) { best[T.id] = ok; store.set("best", best); }
-  const bad = T.qs.map((q, i) => ({ q, a: T.ans[i] })).filter(x => x.a.odp !== x.q.dobra);
+  const fill = (q, l) => q.replace(/\([^)]*\)/, l);
+  const bad = T.qs.map((q, i) => ({ q, a: T.ans[i] })).filter(x => x.a.odp !== x.q.dobra)
+    .map(x => T.orto ? { q: { ...x.q, q: fill(x.q.q, "…"), dobra: fill(x.q.q, x.q.dobra) }, a: { ...x.a, odp: fill(x.q.q, x.a.odp) } } : x);
   app.innerHTML = `<div class="card center">
       <div class="muted">${esc(T.nazwa)}</div>
       <div class="big">${ok}/${n}</div>
