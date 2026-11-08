@@ -199,7 +199,11 @@ async function finish() {
     ${bad.length ? `<div class="card"><h2>Do poprawy (${bad.length})</h2>${bad.map(x => `<div class="mist"><b>${esc(x.q.q)}</b><br>Twoja: ${esc(x.a.odp)}<br>Dobra: <b style="color:var(--ok)">${esc(x.q.dobra)}</b></div>`).join("")}</div>` : `<div class="card center"><h2>Bez błędów – brawo! 👏</h2></div>`}
     <button class="btn wide" onclick="home()">Wróć do testów</button>`;
   window.scrollTo(0, 0);
-  const body = JSON.stringify({ test: T.id, czas: Date.now(), odpowiedzi: T.ans, tryb: T.tryb });
+  // szacunek nagrody (do karty „Czeka na komputer” w Mój czas) – prawdziwą liczy komputer
+  const fast = T.ans.filter((a, i) => a.odp === T.qs[i].dobra && a.ms < WAIT_MS).length;
+  let szac = proc < K.prog ? 0 : Math.max(0, (ok - fast) * K.sekundy - (n - ok) * (K.minus || 0));
+  if (szac > 0 && ok === n && fast === 0 && !T.tryb) szac += (K.komplet || 0) * 60;
+  const body = JSON.stringify({ test: T.id, czas: Date.now(), odpowiedzi: T.ans, tryb: T.tryb, szac });
   let name = null;
   for (let i = 0; i < 3 && !name; i++) {
     try { const r = await fetch(url("wyniki"), { method: "POST", body }); if (r.ok) name = (await r.json()).name; } catch (e) {}
@@ -223,7 +227,7 @@ async function finish() {
   const el = $("#rw"); if (!el) return;
   el.style.color = "var(--m)";
   el.textContent = "Wynik zapisany ✔";
-  $("#rwi").textContent = "Komputer jest wyłączony albo śpi – czas doliczy się sam, gdy go włączysz (tego samego dnia).";
+  $("#rwi").textContent = "Komputer jest wyłączony albo śpi – czas doliczy się sam, gdy go włączysz (wynik czeka do 3 dni).";
 }
 
 home();
