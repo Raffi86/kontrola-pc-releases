@@ -2,6 +2,7 @@ name: Sprzątanie wydań
 
 # Uruchamiane ręcznie: Actions → Sprzątanie wydań → Run workflow.
 # Zostawia najnowsze wydania (domyślnie 3), starsze usuwa razem z plikami APK i tagami.
+# Rusza tylko wydania wersji (tag v1.2.3) – stałe wydania jak „syn” czy „testy” zostają zawsze.
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +27,8 @@ jobs:
           case "$ZOSTAW" in ''|*[!0-9]*) echo "::error::Podaj liczbę, np. 3"; exit 1;; esac
           if [ "$ZOSTAW" -lt 1 ]; then echo "::error::Zostaw co najmniej 1 wydanie"; exit 1; fi
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" -q '.[] | [.created_at, .tag_name] | @tsv' \
-            | sort -r | cut -f2 > wydania.txt
-          echo "Wszystkich wydań: $(wc -l < wydania.txt)"
+            | sort -r | cut -f2 | grep -E '^v[0-9]' > wydania.txt || true
+          echo "Wydań wersji: $(wc -l < wydania.txt) (inne, np. stałe linki do pobierania, nie są ruszane)"
           echo "Zostają:"; head -n "$ZOSTAW" wydania.txt
           n=0
           tail -n +"$((ZOSTAW + 1))" wydania.txt | while read -r tag; do
