@@ -1,0 +1,36 @@
+name: Sprzątanie wydań
+
+# Uruchamiane ręcznie: Actions → Sprzątanie wydań → Run workflow.
+# Zostawia najnowsze wydania (domyślnie 3), starsze usuwa razem z plikami APK i tagami.
+on:
+  workflow_dispatch:
+    inputs:
+      zostaw:
+        description: "Ile najnowszych wydań zostawić"
+        required: true
+        default: "3"
+
+permissions:
+  contents: write
+
+jobs:
+  sprzatanie:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Usuń starsze wydania
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZOSTAW: ${{ github.event.inputs.zostaw }}
+        run: |
+          set -e
+          case "$ZOSTAW" in ''|*[!0-9]*) echo "::error::Podaj liczbę, np. 3"; exit 1;; esac
+          if [ "$ZOSTAW" -lt 1 ]; then echo "::error::Zostaw co najmniej 1 wydanie"; exit 1; fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" -q '.[] | [.created_at, .tag_name] | @tsv' \
+            | sort -r | cut -f2 > wydania.txt
+          echo "Wszystkich wydań: $(wc -l < wydania.txt)"
+          echo "Zostają:"; head -n "$ZOSTAW" wydania.txt
+          n=0
+          tail -n +"$((ZOSTAW + 1))" wydania.txt | while read -r tag; do
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag && echo "usunięto $tag"
+          done
+          echo "::notice title=Sprzątanie wydań::zostawiono $ZOSTAW najnowszych, usunięto $(( $(wc -l < wydania.txt) - ZOSTAW < 0 ? 0 : $(wc -l < wydania.txt) - ZOSTAW ))"
