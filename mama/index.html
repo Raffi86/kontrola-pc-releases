@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Kontrola PC">
+<meta name="theme-color" content="#F5F6FA">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<title>Kontrola PC</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#F5F6FA;color:#1B1E28;
+  padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px)}
+h1{font-size:26px;margin:4px 4px 2px}
+.sub{color:#5B6070;font-size:14px;margin:0 4px 14px}
+.card{background:#fff;border-radius:20px;padding:16px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:14px}
+.name{font-size:20px;font-weight:700}
+.pill{font-size:12px;font-weight:600;padding:3px 9px;border-radius:10px;background:#F1F2F7;color:#5B6070}
+.pill.ok{background:#DCFCE7;color:#166534}.pill.bad{background:#FEE2E2;color:#991B1B}.pill.warn{background:#FEF3C7;color:#92400E}
+.muted{color:#5B6070;font-size:14px}
+.btns{display:flex;gap:8px;margin-top:12px}
+button{flex:1;min-height:48px;border:none;border-radius:13px;font-size:16px;font-weight:600;font-family:inherit;background:#F1F2F7;color:#1B1E28;cursor:pointer}
+button:active{transform:scale(.98)}
+.green{background:#16A34A;color:#fff}.red{background:#FEE2E2;color:#991B1B}.indigo{background:#4F46E5;color:#fff}.white{background:#fff;color:#3730A3}
+.req{background:#EEF0FF}.req .lab{font-size:12px;font-weight:700;color:#4338CA;letter-spacing:.04em}
+.wel{background:#FEF9C3}.wel .t{font-size:18px;font-weight:700;color:#713F12}
+.wel img{width:100%;border-radius:12px;margin-top:10px}
+.ring{width:80px;height:80px;flex:none}
+.err{background:#FEE2E2;color:#991B1B;border-radius:14px;padding:12px;margin-bottom:12px;display:none}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom) + 16px);background:#1B1E28;color:#fff;border-radius:14px;padding:14px;font-size:15px;text-align:center;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+.setup{display:none}
+</style>
+</head>
+<body>
+<h1>Kontrola PC</h1>
+<p class="sub" id="date"></p>
+<div class="err" id="err"></div>
+<div class="card setup" id="setup">
+  <b>Brak połączenia z rodziną</b>
+  <p class="muted">Otwórz link, który przysłał Ci Rafał (z aplikacji Kontrola PC → Ustawienia → „Link dla iPhone'a”).</p>
+</div>
+<div id="list"></div>
+<p class="muted" style="text-align:center;margin-top:18px">Na iPhonie: przycisk Udostępnij → „Do ekranu początkowego”, żeby mieć to jak aplikację.</p>
+<div class="toast" id="toast"></div>
+<script>
+const FB = "https://kontrola-pc-default-rtdb.europe-west1.firebasedatabase.app";
+// klucz rodziny z linku (#k=…) – zapamiętany na tym telefonie
+let KEY = "";
+const m = location.hash.match(/k=([A-Za-z0-9_-]{20,})/);
+if (m) { KEY = m[1]; try { localStorage.setItem("kpcKey", KEY); } catch (e) {} history.replaceState(null, "", location.pathname); }
+if (!KEY) { try { KEY = localStorage.getItem("kpcKey") || ""; } catch (e) {} }
+
+const $ = id => document.getElementById(id);
+const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const url = (base, p, q) => `${FB}/rodziny/${base}/${p}.json${q ? "?" + q : ""}`;
+async function get(p, q, base = KEY) { const r = await fetch(url(base, p, q)); if (!r.ok) throw new Error(r.status); return r.json(); }
+async function send(method, p, body, base = KEY) {
+  const r = await fetch(url(base, p), { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(r.status);
+}
+function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("on"), 2500); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function fmt(min) { if (min < 0) return "∞"; const h = Math.floor(min / 60), m = min % 60; return h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`; }
+function ago(ms) { const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? "przed chwilą" : s < 3600 ? `${Math.round(s / 60)} min temu` : `${Math.round(s / 3600)} h temu`; }
+
+let kids = [];
+async function load() {
+  if (!KEY) { $("setup").style.display = "block"; return; }
+  try {
+    const ids = Object.keys(await get("dzieci", "shallow=true") || {});
+    const out = [];
+    for (const id of ids) {
+      const [s, st, pr] = await Promise.all([get(`dzieci/${id}/ustawienia`), get(`dzieci/${id}/status`), get(`dzieci/${id}/prosby`, 'orderBy="$key"&limitToLast=10')]);
+      if (!s) continue;
+      let photo = null;
+      const box = s.testy && s.testy.skrzynka;
+      if (st && st.stan === "powitanie" && box && box.length >= 20 && (!s.powitanie || s.powitanie.foto !== false)) {
+        try { const z = await get("zdjecie", "", box); if (z && z.dzien === today()) photo = z.jpg; } catch (e) {}
+      }
+      const reqs = Object.entries(pr || {}).map(([k, v]) => ({ id: k, ...v })).filter(r => (r.stan || "nowa") === "nowa").sort((a, b) => b.czas - a.czas);
+      out.push({ id, s, st, reqs, photo, box });
+    }
+    kids = out;
+    $("err").style.display = "none";
+    render();
+  } catch (e) {
+    $("err").textContent = "Brak połączenia – sprawdź internet.";
+    $("err").style.display = "block";
+  }
+}
+
+function render() {
+  const now = Date.now();
+  let h = "";
+  for (const k of kids) {
+    const name = esc(k.s.nazwa || k.id);
+    // kontrola po szkole
+    if (k.st && k.st.stan === "powitanie" && now - k.st.czas < 3 * 60000) {
+      h += `<div class="card wel"><div class="t">🛂 ${name} – kontrola po szkole</div>
+        <div class="muted" style="color:#713F12">Komputer czeka na odblokowanie. Gry zamknięte, czas się nie liczy.</div>
+        ${k.photo ? `<img alt="Zdjęcie plecaka" src="data:image/jpeg;base64,${k.photo}">` : ""}
+        <div class="btns"><button class="green" onclick="unlockWelcome('${k.id}')">Odblokuj komputer</button></div></div>`;
+    }
+    // prośby
+    for (const r of k.reqs) {
+      h += `<div class="card req"><div class="lab">PROŚBA · ${ago(r.czas).toUpperCase()}</div>
+        <div class="name" style="font-size:17px">${name} prosi o ${r.minuty} min</div>
+        ${r.tekst ? `<div class="muted">„${esc(r.tekst)}”</div>` : ""}
+        <div class="btns"><button class="indigo" onclick="answer('${k.id}','${r.id}',${r.minuty},true)">Zgoda +${r.minuty}</button>
+        ${r.minuty > 15 ? `<button class="white" onclick="answer('${k.id}','${r.id}',15,true)">+15</button>` : ""}
+        <button class="white" onclick="answer('${k.id}','${r.id}',0,false)">Odmowa</button></div></div>`;
+    }
+  }
+  for (const k of kids) {
+    const s = k.s, st = k.st || {};
+    const name = esc(s.nazwa || k.id);
+    const blocked = (s.blokadaDo || 0) > now;
+    const online = st.czas && now - st.czas < 2 * 60000 && st.zalogowany;
+    const d = st.czas ? new Date(st.czas) : null;
+    const fresh = d && d.toDateString() === new Date().toDateString();
+    const left = fresh ? (st.pozostalo ?? -1) : null, used = fresh ? (st.uzyte || 0) : 0;
+    let pill = `<span class="pill">nie przy PC</span>`;
+    if (blocked) pill = `<span class="pill bad">zablokowany</span>`;
+    else if (online && st.stan === "powitanie") pill = `<span class="pill warn">kontrola</span>`;
+    else if (online && st.stan !== "ok") pill = `<span class="pill bad">koniec czasu</span>`;
+    else if (online) pill = `<span class="pill ok">przy PC</span>`;
+    const total = Math.max(1, used + Math.max(0, left ?? 0));
+    const frac = left === null ? 0 : left < 0 ? 1 : Math.max(0, left) / total;
+    const col = left === null || left < 0 ? "#16A34A" : left <= 10 ? "#DC2626" : left <= 30 ? "#EA7C0C" : "#16A34A";
+    h += `<div class="card"><div class="row">
+      <svg class="ring" viewBox="0 0 80 80" role="img" aria-label="Zostało ${left === null ? "–" : fmt(left)}">
+        <circle cx="40" cy="40" r="33" fill="none" stroke="#E6E8F0" stroke-width="9"/>
+        <circle cx="40" cy="40" r="33" fill="none" stroke="${col}" stroke-width="9" stroke-linecap="round" stroke-dasharray="${(207 * frac).toFixed(0)} 207" transform="rotate(-90 40 40)"/>
+        <text x="40" y="44" text-anchor="middle" font-size="16" font-weight="800" fill="#1B1E28">${blocked ? "stop" : left === null ? "–" : fmt(left)}</text></svg>
+      <div style="flex:1"><div class="row" style="gap:8px"><span class="name">${name}</span>${pill}</div>
+        <div class="muted">Dziś ${fmt(used)} min${st.aplikacja && online ? " · " + esc(st.aplikacja) : ""}</div></div></div>
+      <div class="btns"><button onclick="bonus('${k.id}',15)">+15 min</button>
+        ${blocked ? `<button class="green" onclick="block('${k.id}',0)">Odblokuj</button>` : `<button class="red" onclick="block('${k.id}',4102444800000)">Zablokuj</button>`}</div></div>`;
+  }
+  $("list").innerHTML = h || (KEY ? `<div class="card muted">Wczytuję…</div>` : "");
+}
+
+async function act(fn, msg) { try { await fn(); toast(msg); } catch (e) { toast("Nie udało się – sprawdź internet"); } load(); }
+async function addBonus(id, min) {
+  const b = await get(`dzieci/${id}/ustawienia/bonus`);
+  const cur = b && b.data === today() ? (b.minuty || 0) : 0;
+  await send("PUT", `dzieci/${id}/ustawienia/bonus`, { data: today(), minuty: Math.max(0, cur + min) });
+}
+function bonus(id, min) { act(() => addBonus(id, min), `Dodano ${min} min`); }
+function block(id, until) { act(() => send("PUT", `dzieci/${id}/ustawienia/blokadaDo`, until), until ? "Zablokowano" : "Odblokowano"); }
+function unlockWelcome(id) { act(() => send("PUT", `dzieci/${id}/ustawienia/powitanieOk`, today()), "Odblokowano – miłej zabawy!"); }
+function answer(id, rid, min, ok) {
+  act(async () => {
+    const cur = await get(`dzieci/${id}/prosby/${rid}`);
+    if (cur && (cur.stan || "nowa") !== "nowa") return;
+    if (ok) await addBonus(id, min);
+    const stan = ok ? "ok" : "odrzucona";
+    await send("PATCH", `dzieci/${id}/prosby/${rid}`, { stan });
+    const k = kids.find(x => x.id === id);
+    if (cur && cur.skrzynkaId && k && k.box) await send("PATCH", `od_syna/${cur.skrzynkaId}`, { stan, minutyOk: ok ? min : 0 }, k.box);
+  }, ok ? `Zgoda: +${min} min` : "Odmówiono");
+}
+
+$("date").textContent = new Date().toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long" });
+load();
+setInterval(() => { if (document.visibilityState === "visible") load(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load(); });
+</script>
+</body>
+</html>
