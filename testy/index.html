@@ -29,6 +29,10 @@
   .ans{position:relative;overflow:hidden;background:#fff;border:2px solid #e5e7eb;padding:15px 16px;text-align:left;font-size:17px;font-weight:600;color:var(--t)}
   .answers.pf .ans{text-align:center;font-size:20px;padding:20px 8px}
   .ans:disabled{color:#9ca3af}
+  .ans.good{border-color:#16a34a!important;background:#dcfce7!important;color:#14532d!important}
+  .ans.bad{border-color:#dc2626!important;background:#fee2e2!important;color:#7f1d1d!important}
+  .verdict{text-align:center;font-size:22px;font-weight:800;margin:14px 0 4px;min-height:30px}
+  .verdict.ok{color:#16a34a}.verdict.no{color:#dc2626}
   .ans .fill{position:absolute;left:0;bottom:0;height:3px;background:var(--a);width:0}
   .big{font-size:52px;font-weight:800;margin:4px 0}
   .reward{font-size:24px;font-weight:800}
@@ -160,6 +164,20 @@ async function start(id, b, hardOnly) {
   question();
 }
 
+/* natychmiastowa informacja: dobrze / źle (dobra odpowiedź podświetlona) */
+async function feedback(btns, chosen, good, next) {
+  btns.forEach(b => b.disabled = true);
+  const ok = chosen.dataset.v === good;
+  btns.forEach(b => { if (b.dataset.v === good) b.classList.add("good"); });
+  if (!ok) chosen.classList.add("bad");
+  const v = document.getElementById("verdict");
+  if (v) {
+    v.className = "verdict " + (ok ? "ok" : "no");
+    v.textContent = ok ? "✅ Dobrze!" : good ? "❌ Źle – dobra odpowiedź jest na zielono" : "❌ Źle";
+  }
+  setTimeout(next, ok ? 900 : 2200);
+}
+
 function question() {
   const q = T.qs[T.i];
   app.innerHTML = `<div class="muted">${esc(T.nazwa)}${q.r ? " · " + esc(q.r) : ""}</div>
@@ -167,16 +185,22 @@ function question() {
     <div class="muted">Pytanie ${T.i + 1} z ${T.qs.length}${q.pf ? " · prawda czy fałsz?" : ""}</div>
     ${q.img && /^https:\/\/((commons|upload)\.wikimedia\.org|raffi86\.github\.io)\//.test(q.img) ? `<div class="center"><img src="${esc(q.img)}" alt="" style="height:190px;max-width:90%;margin:10px 0 4px" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'muted',textContent:'(obrazek się nie wczytał – sprawdź internet)'}))"></div>` : ""}
     <div class="q" style="${T.orto ? "font-size:38px;text-align:center;letter-spacing:1px;margin:18px 0 24px" : ""}">${esc(q.q)}</div>
-    <div class="answers ${q.pf || T.orto ? "pf" : ""}">${q.a.map((a, i) => `<button class="ans" data-i="${i}" disabled style="${T.orto ? "font-size:30px" : ""}">${q.pf ? (a === "Prawda" ? "✔ " : "✘ ") : T.orto ? "" : String.fromCharCode(65 + i) + ". "}${esc(a)}<span class="fill"></span></button>`).join("")}</div>
+    <div class="answers ${q.pf || T.orto ? "pf" : ""}">${q.a.map((a, i) => `<button class="ans" data-i="${i}" data-v="${esc(a)}" disabled style="${T.orto ? "font-size:30px" : ""}">${q.pf ? (a === "Prawda" ? "✔ " : "✘ ") : T.orto ? "" : String.fromCharCode(65 + i) + ". "}${esc(a)}<span class="fill"></span></button>`).join("")}</div>
+    <div class="verdict" id="verdict"></div>
     <button class="btn light wide" id="quit">Przerwij test</button>`;
   const shown = performance.now();
   const btns = [...app.querySelectorAll(".ans")];
   btns.forEach(b => { const f = b.querySelector(".fill"); f.style.transition = `width ${WAIT_MS}ms linear`; requestAnimationFrame(() => requestAnimationFrame(() => f.style.width = "100%")); });
   setTimeout(() => btns.forEach(b => { b.disabled = false; b.querySelector(".fill").style.opacity = 0; }), WAIT_MS);
   btns.forEach(b => b.onclick = () => {
+    if (T.busy) return;
+    T.busy = true;
     T.ans.push({ id: q.id, odp: q.a[+b.dataset.i], ms: Math.round(performance.now() - shown) });
-    T.i++;
-    if (T.i < T.qs.length) question(); else finish();
+    feedback(btns, b, q.dobra, () => {
+      T.busy = false;
+      T.i++;
+      if (T.i < T.qs.length) question(); else finish();
+    });
   });
   $("#quit").onclick = () => { if (confirm("Przerwać test? Nie dostaniesz czasu.")) home(); };
 }
