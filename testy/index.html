@@ -165,7 +165,7 @@ function question() {
   app.innerHTML = `<div class="muted">${esc(T.nazwa)}${q.r ? " · " + esc(q.r) : ""}</div>
     <div class="bar"><div style="width:${(T.i / T.qs.length) * 100}%"></div></div>
     <div class="muted">Pytanie ${T.i + 1} z ${T.qs.length}${q.pf ? " · prawda czy fałsz?" : ""}</div>
-    ${q.img && /^https:\/\/(commons|upload)\.wikimedia\.org\//.test(q.img) ? `<div class="center"><img src="${esc(q.img)}" alt="" style="height:190px;max-width:90%;margin:10px 0 4px" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'muted',textContent:'(obrazek się nie wczytał – sprawdź internet)'}))"></div>` : ""}
+    ${q.img && /^https:\/\/((commons|upload)\.wikimedia\.org|raffi86\.github\.io)\//.test(q.img) ? `<div class="center"><img src="${esc(q.img)}" alt="" style="height:190px;max-width:90%;margin:10px 0 4px" onerror="this.replaceWith(Object.assign(document.createElement('p'),{className:'muted',textContent:'(obrazek się nie wczytał – sprawdź internet)'}))"></div>` : ""}
     <div class="q" style="${T.orto ? "font-size:38px;text-align:center;letter-spacing:1px;margin:18px 0 24px" : ""}">${esc(q.q)}</div>
     <div class="answers ${q.pf || T.orto ? "pf" : ""}">${q.a.map((a, i) => `<button class="ans" data-i="${i}" disabled style="${T.orto ? "font-size:30px" : ""}">${q.pf ? (a === "Prawda" ? "✔ " : "✘ ") : T.orto ? "" : String.fromCharCode(65 + i) + ". "}${esc(a)}<span class="fill"></span></button>`).join("")}</div>
     <button class="btn light wide" id="quit">Przerwij test</button>`;
